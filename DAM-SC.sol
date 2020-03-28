@@ -1,5 +1,5 @@
 pragma solidity ^ 0.4 .16;
-contract DataStore {
+contract DataAuction {
   enum DataStatus {ForSale, Sold, Unsold}
   enum DataCondition {New, Old}
   uint public dataIndex;
@@ -103,7 +103,7 @@ contract DataStore {
   event DBPaid(string info, address databuyer);
   event paymentSettled(address databuyer, string info);
 
-  function DataStore() public {
+  function DataAuction() public {
     dataIndex = 0;
     deposit = 3 ether;
     status = SCStatus.WaitingforDB;
