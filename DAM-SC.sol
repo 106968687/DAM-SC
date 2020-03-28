@@ -1,21 +1,31 @@
 pragma solidity ^ 0.4 .16;
 contract DataStore {
-  enum DataStatus {
-    ForSale,
-    Sold,
-    Unsold
-  }
-  enum DataCondition {
-    New,
-    Old
-  }
+  enum DataStatus {ForSale, Sold, Unsold}
+  enum DataCondition {New, Old}
   uint public dataIndex;
   mapping(address => mapping(uint => Data)) stores;
   mapping(uint => address) dataIdInStore;
   hB[] public highestBidders;
   mapping(address => uint) public bidderId;
   uint startPrice;
+  uint public deposit;
+  address public DSaddress;
+  mapping (address => DB) public databuyers;
+  enum DBStatus {DBDeposited, SuccessfulAuction, Unsatisfied, AuctionCompleted, Refunded}
+  address public DBaddress;
+  enum SCStatus {WaitingforDB, Aborted}
+  SCStatus public status;
+  uint numberOfDBs;
+  uint highestBid;
+  uint public timeliness = 7;
+  address public ABRaddress;
+  address public DTCaddress;
 
+  struct DB {
+      DBStatus status;
+      int result;
+      bytes32 token;
+  }
   struct Data {
     uint id;
     string name;
@@ -50,18 +60,82 @@ contract DataStore {
     bool revealed;
   }
 
-  function DataStore() public {
-    dataIndex = 0;
+  modifier DSDeposit(){
+    require(msg.value == deposit);
+    _;
   }
 
-  function numberOfItems() public returns(uint) {
-    return dataIndex;
+  modifier OnlyDB(){
+    require(msg.sender == DBaddress);
+    _;
+  }
+
+  modifier DBCost(){
+    require(msg.value == deposit);
+    _;
+  }
+
+  modifier DBPay(){
+    require(msg.value == highestBid);
+    _;
+  }
+
+  modifier OnlyABR(){
+      require(msg.sender == ABRaddress);
+      _;
   }
 
   event sellCast(address seller, uint dataId, uint value);
   event bidCast(address bidder, uint dataId, uint value);
   event NewData(uint DATAId, string Name, string Category, string ImageLink, string DescLink,
     uint AuctionStartTime, uint AuctionEndTime, uint DATACondition);
+  event DSDeposited(string info,address datapurchaser);
+  event DBDeposited(address databuyer, string info);
+  event tokenGeneratedforDB(address databuyer, bytes32 token, uint timestamp, uint duration);
+  event successfulAuction(address databuyer);
+  event dataCannotDownload(address databuyer, string info);
+  event ABRIsVerifyingforDB(address databuyer, string info, bytes32 token);
+  event dataUnavailable(address databuyer, string info);
+  event CouldNotDownload(address databuyer, string info);
+  event refundDone(address databuyer);
+  event Unavailable(address databuyer, string info);
+  event refundBasedonDBRequest(string info, address databuyer);
+  event DBPaid(string info, address databuyer);
+  event paymentSettled(address databuyer, string info);
+
+  function DataStore() public {
+    dataIndex = 0;
+    deposit = 3 ether;
+    status = SCStatus.WaitingforDB;
+    numberOfDBs = 0;
+    DTCaddress = 0xd813351258D8A53314E55b12c3Cf11C98dA8E7D4;
+    ABRaddress = 0xd06B32822f5F1838E0Bb05CBEC803889eFDd9380;
+    DSaddress = 0x09BdFdBAc10253e988b4c7197f0faf44Ea7F8479;
+   //DBaddress = 0x9549E34316ab06B205711B2eF1Ea5D078C6e8E5f;
+  }
+
+  function numberOfItems() view public returns(uint) {
+    return dataIndex;
+  }
+
+  function payDeposit() DSDeposit public payable{
+    require(msg.sender == DSaddress);
+    DSDeposited("DS has paid a deposit.", DSaddress);
+  }
+
+  function requestBidData() OnlyDB DBCost payable public{
+    require(status == SCStatus.WaitingforDB);
+    databuyers[msg.sender].status = DBStatus.DBDeposited;
+    DBDeposited(msg.sender, "DB has paid a deposit.");
+    numberOfDBs++;
+  }
+
+  function DBRefund() OnlyDB public payable{
+	require(databuyers[msg.sender].status == DBStatus.DBDeposited);
+    msg.sender.transfer(deposit);
+    databuyers[msg.sender].status = DBStatus.Refunded;
+    refundBasedonDBRequest("The data buyer has been refunded.", msg.sender);
+  }
 
   function sell(uint DATAId, bytes32 SELL) public payable returns(bool) {
     Data storage data = stores[dataIdInStore[DATAId]][DATAId];
@@ -167,12 +241,12 @@ contract DataStore {
     return adrs;
   }
 
-  function totalBids(uint DATAId) public returns(uint) {
+  function totalBids(uint DATAId) view public returns(uint) {
     Data memory data = stores[dataIdInStore[DATAId]][DATAId];
     return data.totalBids;
   }
 
-  function stringToUint(string s) public returns(uint) {
+  function stringToUint(string s) pure public returns(uint) {
     bytes memory b = bytes(s);
     uint res = 0;
     for (uint i = 0; i < b.length; i++) {
@@ -194,9 +268,89 @@ contract DataStore {
   }
 
   //Querying data from the blockchain
-  function getData(uint DATAId) public returns(uint, string, string, string, string, uint, uint, DataStatus, DataCondition) {
+  function getData(uint DATAId) view public returns(uint, string, string, string, string, uint, uint, DataStatus, DataCondition) {
     Data memory data = stores[dataIdInStore[DATAId]][DATAId];
     return (data.id, data.name, data.category, data.imageLink, data.descLink, data.auctionStartTime,
       data.auctionEndTime, data.status, data.condition);
+  }
+
+  function payBid(address databuyer) OnlyDB DBPay() public payable{
+    for (uint i = 0; i < highestBidders.length; i++) {
+      if (databuyer == highestBidders[i].highestBidder){
+        DBPaid("DB has paid the bid.", msg.sender);
+        generateToken(databuyer, timeliness);
+      }
+    }
+  }
+
+  function generateToken(address databuyer,uint Timeliness) internal{
+        bytes32 token = keccak256(databuyer,DSaddress,block.timestamp,Timeliness);
+        databuyers[databuyer].token = token;
+        tokenGeneratedforDB(databuyer, token, block.timestamp, timeliness);
+    }
+
+  function DBComfirmedResult(int result) OnlyDB public{
+    if(result == 1){
+      successfulAuction(msg.sender);
+      databuyers[msg.sender].status = DBStatus.SuccessfulAuction;
+      settlement(msg.sender);
+    }
+    else if(result == 2){
+      dataCannotDownload(msg.sender,"The data resource can not be downloaded.");
+      databuyers[msg.sender].status = DBStatus.Unsatisfied;
+      ABRIsVerifyingforDB(msg.sender, "Token: ", databuyers[msg.sender].token);
+    }
+    else if(result == 3){
+  		dataUnavailable(msg.sender, "The data resource is inconsistent with its description");
+  		databuyers[msg.sender].status = DBStatus.Unsatisfied;
+      ABRIsVerifyingforDB(msg.sender, "Off-chain testing data and Token: ", databuyers[msg.sender].token);
+  	}
+  }
+
+  function downloadResolutionAndPayment(address databuyer, bool arbitrationResult) OnlyABR public payable{
+    require(databuyers[databuyer].status == DBStatus.Unsatisfied);
+    if(arbitrationResult){
+      CouldNotDownload(databuyer, "The data auction is failed.");
+      uint x = deposit;
+      uint y = highestBid;
+      DTCaddress.transfer(x);
+      databuyer.transfer(y);
+      refundDone(databuyer);
+      databuyers[databuyer].status = DBStatus.AuctionCompleted;
+    }
+    else{
+      successfulAuction(databuyer);
+      databuyers[databuyer].status = DBStatus.SuccessfulAuction;
+      settlement(databuyer);
+    }
+  }
+
+  function qualityResolutionAndPayment(address databuyer, bool arbitrationResult) OnlyABR public payable{
+    require(databuyers[databuyer].status == DBStatus.Unsatisfied);
+    if(arbitrationResult){
+      Unavailable(databuyer, "The data auction is failed.");
+      uint x = deposit;
+      uint y = highestBid;
+      DTCaddress.transfer(x);
+      databuyer.transfer(y);
+      refundDone(databuyer);
+      databuyers[databuyer].status = DBStatus.AuctionCompleted;
+    }
+    else{
+      successfulAuction(databuyer);
+      databuyers[databuyer].status = DBStatus.SuccessfulAuction;
+      settlement(databuyer);
+    }
+  }
+
+  function settlement(address databuyer) internal{
+    require(databuyers[databuyer].status == DBStatus.SuccessfulAuction);
+    uint x = deposit;
+    uint y = highestBid/3;
+    ABRaddress.transfer(y);
+    DTCaddress.transfer(y);
+	DSaddress.transfer(x+y);
+    paymentSettled(databuyer, "Settlement has done successfully.");
+    databuyers[databuyer].status = DBStatus.AuctionCompleted;
   }
 }
