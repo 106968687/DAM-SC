@@ -274,7 +274,7 @@ contract DataAuction {
       data.auctionEndTime, data.status, data.condition);
   }
 
-  function payBid(address databuyer) OnlyDB DBPay() public payable{
+  function payBid(address databuyer) OnlyDB DBPay public payable{
     for (uint i = 0; i < highestBidders.length; i++) {
       if (databuyer == highestBidders[i].highestBidder){
         DBPaid("DB has paid the bid.", msg.sender);
